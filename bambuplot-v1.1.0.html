@@ -738,8 +738,8 @@ footer a:hover{text-decoration:underline;}
           <label class="checkbox-row"><input type="checkbox" id="mirrorX"> Mirror X</label>
           <label class="checkbox-row"><input type="checkbox" id="mirrorY"> Mirror Y</label>
         </div>
-        <label class="checkbox-row"><input type="checkbox" id="useArcsCheck"> Use G2/G3 arc moves</label>
-        <p class="help-note">Replaces curved pen paths with true circular-arc moves (smaller, smoother G-code). Firmware support varies — Marlin and Klipper handle it well; some Bambu firmwares limit arc radius. Falls back to G1 automatically when an arc can't be described safely, so it's fine to leave on.</p>
+        <label class="checkbox-row"><input type="checkbox" id="useArcsCheck"> Use G2/G3 arc moves (DO NOT USE THIS ON A BAMBULAB PRINTER</label>
+        <p class="help-note">Replaces curved pen paths with true circular-arc moves (smaller, smoother G-code). Firmware support varies — Marlin and Klipper handle it well; Bambu does not!</p>
         <p class="help-note">If your first dry-run plots mirrored or rotated, flip the matching axis above and regenerate — every printer's console reports coordinates slightly differently.</p>
         <details>
           <summary style="cursor:pointer;color:var(--text-muted);font-size:12px;">How do I send this to a Bambu printer?</summary>
