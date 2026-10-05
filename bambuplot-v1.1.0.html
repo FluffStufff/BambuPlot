@@ -724,12 +724,12 @@ footer a:hover{text-decoration:underline;}
         </div>
         <p class="help-note">Adds a brief pause (G4) right after every pen up/down move. Without it, some printer firmware starts the next sideways move before the pen has fully finished lifting or lowering, which can drag a faint stray line across the paper. If you still see stray marks, try raising this a bit (150–250ms); if moves feel sluggish, you can lower it.</p>
         <div class="field">
-          <label>Pen tip offset from nozzle (mm)</label>
+          <label>Tool offset (pen tip vs nozzle)</label>
           <div class="row">
-            <div class="field"><label>X</label><input type="number" id="offsetX" step="0.5" value="0"></div>
-            <div class="field"><label>Y</label><input type="number" id="offsetY" step="0.5" value="0"></div>
+            <div class="field"><label>Tool offset X (mm)</label><input type="number" id="toolOffsetX" step="0.5" value="0"></div>
+            <div class="field"><label>Tool offset Y (mm)</label><input type="number" id="toolOffsetY" step="0.5" value="0"></div>
           </div>
-          <p class="help-note">How far the pen tip sits from the nozzle on the print head. Positive X = pen to the right of the nozzle, positive Y = pen toward the back. Enter the distance as measured — the drawing is shifted the other way to compensate.</p>
+          <p class="help-note">Convention: <b>penPosition = nozzlePosition + toolOffset</b>. Positive X = pen to the right of the nozzle, positive Y = pen toward the back — so a pen mounted 45&nbsp;mm to the LEFT of the nozzle uses X = -45. The canvas always shows where the physical pen tip draws; the G-code moves the nozzle by (canvas point − toolOffset), so drawings are never visually shifted. The shaded bed strips show the area the pen tip cannot reach.</p>
         </div>
         <label class="checkbox-row"><input type="checkbox" id="homeCheck" checked> Home all axes (G28) at start</label>
         <label class="checkbox-row" id="homePauseRow"><input type="checkbox" id="homePauseCheck"> &nbsp;&nbsp;↳ Dwell after homing — <input type="number" id="homePauseSec" value="30" min="1" max="300" step="1" style="width:52px;padding:3px 5px;"> s (G4 — time to clip on the pen)</label>
@@ -1165,7 +1165,7 @@ const HW_MAX_VARIANTS = 5;
 
 const pen = {
   zDraw:0.5, zLift:8, drawFeed:1500, travelFeed:6000, zFeed:600,
-  offsetX:0, offsetY:0, home:true, homePause:false, homePauseSec:30, motorsOff:false, mirrorX:false, mirrorY:false,
+  toolOffsetX:0, toolOffsetY:0, home:true, homePause:false, homePauseSec:30, motorsOff:false, mirrorX:false, mirrorY:false,
   settleMs:120, useArcs:false,
 };
 
@@ -2514,24 +2514,41 @@ function drawBase(){
   }
   ctx.restore();
 
-// Reachable area: the pen offset shifts the nozzle reach, so a strip along the
-  // front/top and sides of the bed is physically out of reach and would be
-  // clamped in the G-code. Draw the exact reachable rectangle so it's clear
-  // where plots get cut. (y=0 is the bed's front/top of the canvas here.)
-  if(pen.offsetX!==0 || pen.offsetY!==0){
-    const limX0 = Math.max(0, pen.offsetX);
-    const limX1 = Math.min(bedW, bedW + pen.offsetX);
-    const limY0 = Math.max(0, -pen.offsetY);
-    const limY1 = Math.min(bedH, bedH - pen.offsetY);
+  // Reachable area: penPosition = nozzlePosition + toolOffset, and the nozzle
+  // can only travel within X0..bedW / Y0..bedH — so a nonzero tool offset
+  // leaves a strip of the bed the pen tip can never reach. Shade the
+  // unreachable strips and outline the exact reachable rectangle so it's clear
+  // at a glance what can actually be plotted. (Canvas coords: y=0 is the top
+  // of the canvas = the back of the bed.)
+  if(pen.toolOffsetX!==0 || pen.toolOffsetY!==0){
+    const r = penReachRect();
+    const empty = !(r.x1>r.x0 && r.y1>r.y0);
     ctx.save();
-    ctx.setLineDash([5,4]);
-    ctx.strokeStyle='rgba(20,70,180,0.85)';
-    ctx.lineWidth=1.8;
-    ctx.strokeRect(mmToPx(limX0), mmToPx(limY0), mmToPx(limX1-limX0), mmToPx(limY1-limY0));
-    ctx.setLineDash([]);
-    ctx.fillStyle='rgba(20,70,180,0.9)';
-    ctx.font='bold 10px JetBrains Mono, monospace';
-    ctx.fillText('reachable', mmToPx(limX1)-58, mmToPx(limY0)-5);
+    if(empty){
+      ctx.fillStyle='rgba(201,84,63,0.13)';
+      ctx.fillRect(0,0, mmToPx(bedW), mmToPx(bedH));
+      ctx.fillStyle='rgba(201,84,63,0.95)';
+      ctx.font='bold 12px JetBrains Mono, monospace';
+      ctx.textAlign='center';
+      ctx.fillText('NO REACHABLE AREA', mmToPx(bedW)/2, mmToPx(bedH)/2-6);
+      ctx.fillText('tool offset too large for this bed', mmToPx(bedW)/2, mmToPx(bedH)/2+12);
+      ctx.textAlign='left';
+    } else {
+      // shade everything the pen tip cannot reach
+      ctx.fillStyle='rgba(201,84,63,0.13)';
+      if(r.x0>0) ctx.fillRect(0,0, mmToPx(r.x0), mmToPx(bedH));
+      if(r.x1<bedW) ctx.fillRect(mmToPx(r.x1),0, mmToPx(bedW-r.x1), mmToPx(bedH));
+      if(r.y0>0) ctx.fillRect(0,0, mmToPx(bedW), mmToPx(r.y0));
+      if(r.y1<bedH) ctx.fillRect(0,mmToPx(r.y1), mmToPx(bedW), mmToPx(bedH-r.y1));
+      ctx.setLineDash([5,4]);
+      ctx.strokeStyle='rgba(20,70,180,0.85)';
+      ctx.lineWidth=1.8;
+      ctx.strokeRect(mmToPx(r.x0), mmToPx(r.y0), mmToPx(r.x1-r.x0), mmToPx(r.y1-r.y0));
+      ctx.setLineDash([]);
+      ctx.fillStyle='rgba(20,70,180,0.9)';
+      ctx.font='bold 10px JetBrains Mono, monospace';
+      ctx.fillText('reachable', Math.max(2, mmToPx(r.x1)-58), Math.max(10, mmToPx(r.y0)-5));
+    }
     ctx.restore();
   }
 
@@ -2611,7 +2628,8 @@ function draw(){
   }
 
   document.getElementById('statsBar').innerHTML =
-    `<b>${printer.name}</b> ${bedW}×${bedH}mm · Items <b>${items.length}</b> · Strokes <b>${totalStrokes}</b> · Ink <b>${(totalLen/1000).toFixed(2)}m</b>`;
+    `<b>${printer.name}</b> ${bedW}×${bedH}mm · Items <b>${items.length}</b> · Strokes <b>${totalStrokes}</b> · Ink <b>${(totalLen/1000).toFixed(2)}m</b>`+
+    (pen.toolOffsetX!==0||pen.toolOffsetY!==0 ? ` · <span style="color:var(--danger)">shaded = unreachable by the pen</span>` : '');
 }
 
 /* ================= POINTER INTERACTION ================= */
@@ -3470,6 +3488,16 @@ function syncHomeUI(){
   document.getElementById('homePauseCheck').disabled = !pen.home;
   document.getElementById('homePauseSec').disabled = !pen.home || !pen.homePause;
 }
+// Tool offsets were renamed from offsetX/offsetY to toolOffsetX/toolOffsetY.
+// Older profiles and stored prefs only have the legacy names, so read both —
+// a profile saved without any offset fields loads as 0 / 0 (no offset).
+function readToolOffset(src, axis){
+  const cur = src['toolOffset'+axis];
+  if(typeof cur==='number' && isFinite(cur)) return cur;
+  const legacy = src['offset'+axis];
+  if(typeof legacy==='number' && isFinite(legacy)) return legacy;
+  return 0;
+}
 function loadPrefs(){
   let data=null;
   try{ data=JSON.parse(localStorage.getItem(PREFS_KEY)||'null'); }catch(e){ return; }
@@ -3489,10 +3517,12 @@ function loadPrefs(){
   }
 
   if(data.pen && typeof data.pen==='object'){
-    const numKeys=['zDraw','zLift','drawFeed','travelFeed','zFeed','settleMs','homePauseSec','offsetX','offsetY'];
+    const numKeys=['zDraw','zLift','drawFeed','travelFeed','zFeed','settleMs','homePauseSec'];
     const boolKeys=['home','homePause','motorsOff','mirrorX','mirrorY','useArcs'];
     numKeys.forEach(k=>{ if(typeof data.pen[k]==='number' && isFinite(data.pen[k])) pen[k]=data.pen[k]; });
     boolKeys.forEach(k=>{ if(typeof data.pen[k]==='boolean') pen[k]=data.pen[k]; });
+    pen.toolOffsetX = readToolOffset(data.pen,'X');
+    pen.toolOffsetY = readToolOffset(data.pen,'Y');
     document.getElementById('zDraw').value=pen.zDraw;
     document.getElementById('zLift').value=pen.zLift;
     document.getElementById('drawFeed').value=pen.drawFeed;
@@ -3500,8 +3530,8 @@ function loadPrefs(){
     document.getElementById('zFeed').value=pen.zFeed;
     document.getElementById('settleMs').value=pen.settleMs;
     document.getElementById('homePauseSec').value=pen.homePauseSec;
-    document.getElementById('offsetX').value=pen.offsetX;
-    document.getElementById('offsetY').value=pen.offsetY;
+    document.getElementById('toolOffsetX').value=pen.toolOffsetX;
+    document.getElementById('toolOffsetY').value=pen.toolOffsetY;
     document.getElementById('homeCheck').checked=pen.home;
     document.getElementById('homePauseCheck').checked=pen.homePause;
     document.getElementById('motorsOffCheck').checked=pen.motorsOff;
@@ -3519,7 +3549,15 @@ function bindNum(id, key){
 }
 bindNum('zDraw','zDraw'); bindNum('zLift','zLift'); bindNum('drawFeed','drawFeed');
 bindNum('travelFeed','travelFeed'); bindNum('zFeed','zFeed'); bindNum('settleMs','settleMs');
-bindNum('offsetX','offsetX'); bindNum('offsetY','offsetY');
+// Tool offsets change the reachable-area overlay, so redraw the bed live.
+function bindToolOffset(id, key){
+  document.getElementById(id).addEventListener('input', e=>{
+    pen[key]=parseFloat(e.target.value)||0;
+    savePrefs();
+    draw();
+  });
+}
+bindToolOffset('toolOffsetX','toolOffsetX'); bindToolOffset('toolOffsetY','toolOffsetY');
 document.getElementById('homeCheck').addEventListener('change', e=>{
   pen.home=e.target.checked;
   syncHomeUI();
@@ -3589,18 +3627,22 @@ function applyLoadedProfile(data){
   }
 
   if(data.pen && typeof data.pen==='object'){
-    const numKeys = ['zDraw','zLift','drawFeed','travelFeed','zFeed','settleMs','homePauseSec','offsetX','offsetY'];
+    const numKeys = ['zDraw','zLift','drawFeed','travelFeed','zFeed','settleMs','homePauseSec'];
     const boolKeys = ['home','homePause','motorsOff','mirrorX','mirrorY','useArcs'];
     numKeys.forEach(k=>{ if(typeof data.pen[k]==='number' && isFinite(data.pen[k])) pen[k]=data.pen[k]; });
     boolKeys.forEach(k=>{ if(typeof data.pen[k]==='boolean') pen[k]=data.pen[k]; });
+    // Missing offset fields (profiles saved before tool offsets existed, or
+    // using the legacy offsetX/offsetY names) resolve to 0 or the legacy value.
+    pen.toolOffsetX = readToolOffset(data.pen,'X');
+    pen.toolOffsetY = readToolOffset(data.pen,'Y');
     document.getElementById('zDraw').value = pen.zDraw;
     document.getElementById('zLift').value = pen.zLift;
     document.getElementById('drawFeed').value = pen.drawFeed;
     document.getElementById('travelFeed').value = pen.travelFeed;
     document.getElementById('zFeed').value = pen.zFeed;
     document.getElementById('settleMs').value = pen.settleMs;
-    document.getElementById('offsetX').value = pen.offsetX;
-    document.getElementById('offsetY').value = pen.offsetY;
+    document.getElementById('toolOffsetX').value = pen.toolOffsetX;
+    document.getElementById('toolOffsetY').value = pen.toolOffsetY;
     document.getElementById('homeCheck').checked = pen.home;
     document.getElementById('homePauseCheck').checked = pen.homePause;
     document.getElementById('homePauseSec').value = pen.homePauseSec;
@@ -3624,13 +3666,32 @@ function applyLoadedProfile(data){
   toast(changed ? 'Profile loaded.' : 'Nothing recognizable in that file.');
 }
 
-/* ================= G-CODE GENERATION ================= */
+/* ================= G-CODE GENERATION =================
+   Convention (everywhere): penPosition = nozzlePosition + toolOffset.
+   A pen mounted 45 mm to the LEFT of the nozzle therefore has
+   toolOffsetX = -45, toolOffsetY = 0.
+
+   Canvas/world coords: x equals the machine X; y is flipped — canvas y=0 is
+   the back of the bed (max machine Y). Objects on the canvas are where the
+   physical PEN tip should draw, so G-code emits the NOZZLE position
+   (canvas point − toolOffset), never a visually shifted path. */
 function toMachine(p){
-  let x = p.x - pen.offsetX;
-  let y = (bedH - p.y) - pen.offsetY;
+  let x = p.x - pen.toolOffsetX;
+  let y = (bedH - p.y) - pen.toolOffsetY;
   if(pen.mirrorX) x = bedW - x;
   if(pen.mirrorY) y = bedH - y;
   return {x,y};
+}
+// The rectangle of pen positions reachable on the bed, in canvas coords.
+// nozzle ∈ [0,bedW] × [0,bedH] (machine Y up) → pen = nozzle + toolOffset,
+// clipped to the bed, then flipped back into canvas Y.
+function penReachRect(){
+  return {
+    x0: Math.max(0, pen.toolOffsetX),
+    y0: Math.max(0, -pen.toolOffsetY),
+    x1: Math.min(bedW, bedW + pen.toolOffsetX),
+    y1: Math.min(bedH, bedH - pen.toolOffsetY),
+  };
 }
 function fmt(v){ return v.toFixed(3); }
 
@@ -3714,19 +3775,29 @@ function fitArc(pts, start){
 }
 
 function generateGCode(){
-  let clampedCount=0, droppedCount=0;
-  function clampPt(p){
-    let cx=p.x, cy=p.y, changed=false;
-    if(cx<0){cx=0;changed=true;} if(cx>bedW){cx=bedW;changed=true;}
-    if(cy<0){cy=0;changed=true;} if(cy>bedH){cy=bedH;changed=true;}
-    if(changed) clampedCount++;
-    return {x:cx,y:cy};
+  let droppedCount=0;
+  // Snap float-noise overshoot (from dragging/scaling) back onto the limit.
+  // Anything genuinely outside the nozzle range FAILS generation instead of
+  // being dropped: removing a point would alter the toolpath and could connect
+  // two distant points with an unintended straight segment. The Generate button
+  // validates reach before calling this, so a throw here should be impossible
+  // — it only fires if validation and generation ever diverge.
+  function sanitizePt(p){
+    const tol = NOZZLE_TOL;
+    if(p.x < -tol || p.x > bedW+tol || p.y < -tol || p.y > bedH+tol){
+      throw new Error(`nozzle coordinate out of range: X${fmt(p.x)} Y${fmt(p.y)} (allowed X0-${bedW} Y0-${bedH})`);
+    }
+    return {x:clamp(p.x,0,bedW), y:clamp(p.y,0,bedH)};
   }
   const settleMs = Math.max(0, Math.round(pen.settleMs||0));
   const lines=[];
   lines.push('; Generated by BambuPlot — free pen-plotter G-code generator for Bambu Lab printers');
   lines.push(`; Printer: ${printer.name}   Bed: ${bedW}x${bedH}mm`);
   lines.push('; Coordinates assume the front-left corner of the bed is X0 Y0.');
+  if(pen.toolOffsetX!==0 || pen.toolOffsetY!==0){
+    lines.push(`; Tool offset (penPosition = nozzlePosition + offset): X${fmt(pen.toolOffsetX)} Y${fmt(pen.toolOffsetY)}`);
+    lines.push('; Path coordinates below are NOZZLE positions (canvas pen path minus tool offset).');
+  }
   lines.push('; ALWAYS run a dry pass with the pen lifted first.');
   lines.push('G90 ; absolute positioning');
   lines.push('G21 ; millimeters');
@@ -3767,7 +3838,7 @@ function generateGCode(){
       const pts = seg.map(p=>{
         const wp = xf(p);
         if(!isFinitePt(wp)){ droppedCount++; return null; }
-        return clampPt(toMachine(wp));
+        return sanitizePt(toMachine(wp));
       }).filter(Boolean);
       if(pts.length<2) continue; // whole stroke became degenerate, skip it rather than write a broken line
       lines.push(`G0 X${fmt(pts[0].x)} Y${fmt(pts[0].y)} F${pen.travelFeed}`);
@@ -3783,7 +3854,7 @@ function generateGCode(){
   lines.push(`G0 X0 Y0 F${pen.travelFeed}`);
   if(pen.motorsOff) lines.push('M84 ; disable motors');
   const drawMinutes = totalLen/pen.drawFeed;
-  return {text:lines.join('\n'), totalLen, strokeCount, drawMinutes, clampedCount, droppedCount, lineCount:lines.length};
+  return {text:lines.join('\n'), totalLen, strokeCount, drawMinutes, droppedCount, lineCount:lines.length};
 }
 
 // Counts points across visible items without building any G-code, so the
@@ -3797,12 +3868,64 @@ function countVisiblePoints(){
   return n;
 }
 
+// Slack (mm) so float noise left over from dragging/scaling a path never
+// blocks an otherwise valid design from generating.
+const NOZZLE_TOL = 0.01;
+
+// Walks every point of every visible item after the pen→nozzle conversion
+// (toMachine) and reports the ones that would move the nozzle outside
+// X0..bedW / Y0..bedH — i.e. the drawing exceeds the drawable area.
+// Returns null when everything is reachable, otherwise
+// {outCount, worst (mm), firstLabel} so the caller can block G-code
+// generation with a clear message instead of silently clamping paths.
+function validateNozzleReach(){
+  let outCount=0, worst=0, firstLabel=null;
+  for(const item of items){
+    if(!item.visible) continue;
+    const xf = makeItemTransformer(item);
+    for(const seg of item.paths){
+      for(const p of seg){
+        const wp = xf(p);
+        if(!isFinitePt(wp)) continue; // broken points are reported separately
+        const m = toMachine(wp);
+        let over = 0;
+        if(m.x < 0) over = -m.x;
+        else if(m.x > bedW) over = m.x-bedW;
+        if(m.y < 0) over = Math.max(over, -m.y);
+        else if(m.y > bedH) over = Math.max(over, m.y-bedH);
+        if(over > NOZZLE_TOL){
+          outCount++;
+          if(over > worst) worst = over;
+          if(!firstLabel) firstLabel = item.label;
+        }
+      }
+    }
+  }
+  if(!outCount) return null;
+  return {outCount, worst, firstLabel};
+}
+
 const GCODE_PREVIEW_LIMIT = 4000; // lines shown in the on-screen preview
 const POINT_COUNT_WARN = 120000;  // ask for confirmation above this
 
 document.getElementById('generateBtn').addEventListener('click', ()=>{
   hidePreviewBar();
   if(items.filter(i=>i.visible).length===0){ toast('Add something to the bed first.'); return; }
+  // Block unsafe files up front: if the pen→nozzle conversion would push the
+  // nozzle outside the printer's coordinate range, the drawing exceeds the
+  // drawable area — report it instead of clamping/distorting the paths.
+  const reach = validateNozzleReach();
+  if(reach){
+    window._lastGcode = null; // don't leave a stale, unrelated file downloadable
+    document.getElementById('gcodeOut').textContent = '; G-code not generated — fix the placement issue shown next to this panel, then generate again.';
+    document.getElementById('gcodeStats').innerHTML =
+      `<span style="color:var(--danger)"><b>Drawing exceeds the drawable area.</b><br>`+
+      `${reach.outCount.toLocaleString()} point(s) would push the nozzle outside X0–${bedW} / Y0–${bedH}`+
+      ` (by up to <b>${reach.worst.toFixed(1)} mm</b>)${reach.firstLabel?` — first seen in “${reach.firstLabel}”`:''}.<br>`+
+      `Nothing was generated. Move the item into the un-shaded area or reduce the tool offset, then try again.</span>`;
+    toast('Drawing exceeds the drawable area — G-code not generated.');
+    return;
+  }
   const pointCount = countVisiblePoints();
   if(pointCount > POINT_COUNT_WARN){
     const ok = confirm(
@@ -3831,7 +3954,6 @@ document.getElementById('generateBtn').addEventListener('click', ()=>{
       document.getElementById('gcodeStats').innerHTML =
         `Strokes: <b>${result.strokeCount}</b> · Ink path: <b>${(result.totalLen/1000).toFixed(2)}m</b><br>`+
         `Est. draw time: <b>~${Math.max(1,Math.round(result.drawMinutes))} min</b> · Lines: <b>${result.lineCount.toLocaleString()}</b>`+
-        (result.clampedCount? `<br><span style="color:var(--danger)">${result.clampedCount} points were outside the bed and got clamped to the edge.</span>`:'')+
         (result.droppedCount? `<br><span style="color:var(--danger)">${result.droppedCount} broken points were skipped.</span>`:'');
       window._lastGcode = result.text;
     } catch(err){
@@ -4035,7 +4157,7 @@ function pvMachineToCanvasMm(m){
   let mx=m.x, my=m.y;
   if(pen.mirrorX) mx=bedW-mx;
   if(pen.mirrorY) my=bedH-my;
-  return {x: mx+pen.offsetX, y: bedH-my-pen.offsetY}; // nozzle -> where the pen actually draws
+  return {x: mx+pen.toolOffsetX, y: bedH-my-pen.toolOffsetY}; // nozzle -> where the pen actually draws
 }
 function pvLerp(a,b,t){ return {x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t}; }
 function pvApplyStyle(move){
