@@ -1,7 +1,5 @@
 # BambuPlot
 
-Access anywhere from https://fluffstufff.github.io/BambuPlot/bambuplot.html
-
 Turn a Bambu Lab 3D printer into a pen plotter.
 
 This version started as a fork of [Joep648's original BambuPlot](https://github.com/Joep648/BambuPlot).
